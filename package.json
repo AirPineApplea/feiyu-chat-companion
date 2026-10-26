@@ -1,6 +1,6 @@
 {
   "name": "feiyu-chat-companion",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "肥鱼陪聊：一只永远在屏幕上、能拖、会眨眼、会说话的鲸鱼娘。独立实现，不依赖 dsh-pet。",
   "type": "module",
