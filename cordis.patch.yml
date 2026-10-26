@@ -1,0 +1,5 @@
+# feiyu-chat-companion（肥鱼陪聊）bundle patch：把桌宠挂进 profile。
+# 行只由这里提供，不要在 profile 的 cordis.patch.yml 里再 insert 同一个 id。
+- insert:
+    - id: feiyu-chat
+      name: 'feiyu-chat-companion'
