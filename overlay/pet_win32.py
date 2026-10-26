@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from ctypes import wintypes
 
 import numpy as np
@@ -139,6 +140,30 @@ user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LP
                                    wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID]
 user32.RegisterClassExW.restype = wintypes.WORD
 
+# GDI 的句柄在 64 位下是 64 位值（常见形如 0xFFFFFFFF9A0B1234）。
+# 不声明 argtypes 的话 ctypes 按 32 位 int 收，传进去就
+# "argument 1: OverflowError: int too long to convert" —— 而且会被 ctypes 静默吞掉。
+# 踩过：气泡只在**尺寸变化**时才删旧 DC，于是同尺寸能显示、换个长度就永久丢一句。
+# 这跟上面 DefWindowProcW 的 LPARAM 是同一个病根。
+gdi32.CreateCompatibleDC.restype = wintypes.HDC
+gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+gdi32.CreateDIBSection.argtypes = [wintypes.HDC, ctypes.c_void_p, wintypes.UINT,
+                                   ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD]
+gdi32.SelectObject.restype = wintypes.HGDIOBJ
+gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+gdi32.DeleteObject.restype = wintypes.BOOL
+gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+gdi32.DeleteDC.restype = wintypes.BOOL
+gdi32.DeleteDC.argtypes = [wintypes.HDC]
+
+user32.GetDC.restype = wintypes.HDC
+user32.GetDC.argtypes = [wintypes.HWND]
+user32.ReleaseDC.restype = ctypes.c_int
+user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+user32.ShowWindow.restype = wintypes.BOOL
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+
 
 class RECT(ctypes.Structure):
     _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
@@ -156,6 +181,15 @@ class SIZE(ctypes.Structure):
 class BLENDFUNCTION(ctypes.Structure):
     _fields_ = [("BlendOp", wintypes.BYTE), ("BlendFlags", wintypes.BYTE),
                 ("SourceConstantAlpha", wintypes.BYTE), ("AlphaFormat", wintypes.BYTE)]
+
+
+# GetDC 现在按 64 位句柄返回，所以这里必须显式声明：两个 HDC 都要收得住，
+# 否则会以同样的 OverflowError 在另一处炸掉。
+user32.UpdateLayeredWindow.argtypes = [
+    wintypes.HWND, wintypes.HDC, ctypes.POINTER(POINT), ctypes.POINTER(SIZE),
+    wintypes.HDC, ctypes.POINTER(POINT), wintypes.DWORD,
+    ctypes.POINTER(BLENDFUNCTION), wintypes.DWORD,
+]
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -199,13 +233,25 @@ def load_rgba(path, target_h):
     halo = (alpha < 90) & (bright > 170)
     arr[halo, 3] = 0
 
-    out = Image.fromarray(arr, "RGBA")
+    # 预乘 alpha 再缩放。两个理由：
+    #   1) UpdateLayeredWindow + AC_SRC_ALPHA 要的是预乘位图。喂直通 alpha，
+    #      每个半透明像素会被抬亮 (1-alpha)·色 —— 金属碗和围裙边上实测多亮
+    #      177 个色阶，那就是「廉价白边」的真身。
+    #   2) 先预乘再缩放，透明像素的黑 RGB 才不会渗进边缘把轮廓拉暗。
+    straight = np.asarray(Image.fromarray(arr, "RGBA")).astype(np.float32)
+    straight[:, :, :3] *= straight[:, :, 3:4] / 255.0
+    out = Image.fromarray(straight.astype(np.uint8), "RGBA")
     w, h = out.size
     nw = max(1, int(round(w * (target_h / float(h)))))
     out = out.resize((nw, target_h), Image.LANCZOS)
 
-    bgra = np.array(out)[:, :, [2, 1, 0, 3]]     # DIB 要 BGRA
-    return out.size, np.ascontiguousarray(bgra)
+    # 缩放会在轮廓上来回振铃，预乘之后可能出现「RGB 比 alpha 还大」的过冲点，
+    # 那在屏幕上是几颗亮斑。夹回不变量里。
+    scaled = np.array(out).astype(np.float32)
+    scaled[:, :, :3] = np.minimum(scaled[:, :, :3], scaled[:, :, 3:4])
+
+    bgra = np.ascontiguousarray(scaled.astype(np.uint8)[:, :, [2, 1, 0, 3]])   # DIB 要 BGRA（已预乘）
+    return out.size, bgra
 
 
 def _wrap(text, font, max_w):
@@ -276,8 +322,12 @@ class Bubble(object):
             0, 0, 8, 8, None, None, wc.hInstance, None)
 
     def _upload(self, img):
-        arr = np.array(img)
-        bgra = np.ascontiguousarray(arr[:, :, [2, 1, 0, 3]])
+        # 预乘 alpha。UpdateLayeredWindow + AC_SRC_ALPHA 要的就是预乘位图，
+        # 喂直通 alpha 会把每个半透明像素抬亮 (1-alpha)·色 —— 气泡的圆角边和字边
+        # 也会因此有一圈亮边。
+        arr = np.array(img).astype(np.float32)
+        arr[:, :, :3] *= arr[:, :, 3:4] / 255.0
+        bgra = np.ascontiguousarray(arr.astype(np.uint8)[:, :, [2, 1, 0, 3]])
         w, h = img.size
         if (w, h) != (self.w, self.h) or self.hdc_mem is None:
             if self.hbmp:
@@ -465,10 +515,30 @@ class Pet(object):
         bx = max(self.left, min(bx, self.right - bw))
         return bx, by
 
+    def _log(self, msg):
+        """往 pet.log 追加一行。
+
+        为什么需要：_tick 是在 ctypes 回调里跑的，抛异常会被静默吞掉（只打一行到
+        stderr，而桌宠是 stdio:ignore 起的，那行也丢了）。出了问题就是黑箱。
+        """
+        try:
+            path = os.path.join(STATE_DIR, "pet.log")
+            try:
+                if os.path.getsize(path) > 512 * 1024:
+                    os.replace(path, path + ".1")
+            except OSError:
+                pass
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(time.strftime("%H:%M:%S ") + msg + "\n")
+        except Exception:
+            pass
+
     def _show_bubble(self, text, duration=6.0):
         img = render_bubble(text)
         bx, by = self._bubble_pos(img.size[0], img.size[1])
+        self._log(f"气泡 {img.size} @({bx},{by}) {duration:.1f}s 「{text[:24]}」")
         self.bubble.show(img, bx, by, duration)
+        self._log(f"  显示后 visible={self.bubble.visible}")
 
     def _check_say(self):
         try:
@@ -477,18 +547,22 @@ class Pet(object):
             return
         if stamp == self.say_mtime:
             return
-        self.say_mtime = stamp
         try:
             with open(SAY_PATH, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-        except Exception:
+        except Exception as exc:
+            # 记账放到解析成功之后：Host 现在已经是原子写了，但万一还是撞上
+            # 半截文件，这一句不能就此永久丢掉 —— 下一轮还要再试。
+            self._log(f"读 say.json 失败（{exc}），不记账，下次重试")
             return
+        self.say_mtime = stamp
         text = str(data.get("text") or "").strip()
         if not text:
             return
         # 不用 seq 做去重：Host 重启会归零，人工写一次乱序值也会把它永久卡住
         # （踩过两次）。只认「文件变过没」，mtime 变了就是新的一句话。
         if self.muted:
+            self._log("静音中，这句跳过")
             return      # 静音时读掉但不播：恢复后不会一口气涌出来
         self._show_bubble(text, float(data.get("duration") or 6.0))
 
@@ -586,19 +660,24 @@ class Pet(object):
             pass
 
     def _tick(self):
-        self._check_say()
-        self._check_control()
-        self._probe_foreground()
-        self.bubble.tick()
-        now = time.time()
-        if self.blink_until:
-            if now >= self.blink_until:
-                self._set_frame(0)
-                self.blink_until = 0.0
-                self.next_blink = now + random.uniform(2.5, 6.5)
-        elif now >= self.next_blink:
-            self._set_frame(1)
-            self.blink_until = now + random.uniform(0.10, 0.16)
+        # 整轮包起来。以前任何一步抛异常都会被 ctypes 静默吞掉，然后这一轮剩下的
+        # 全跳过（气泡没了、眨眼停一拍），而且没有任何记录 —— 查都无从查起。
+        try:
+            self._check_say()
+            self._check_control()
+            self._probe_foreground()
+            self.bubble.tick()
+            now = time.time()
+            if self.blink_until:
+                if now >= self.blink_until:
+                    self._set_frame(0)
+                    self.blink_until = 0.0
+                    self.next_blink = now + random.uniform(2.5, 6.5)
+            elif now >= self.next_blink:
+                self._set_frame(1)
+                self.blink_until = now + random.uniform(0.10, 0.16)
+        except Exception:
+            self._log("tick 抛异常:\n" + traceback.format_exc()[-1200:])
 
     def _paint(self, x, y):
         pt_dst = POINT(x, y)
