@@ -1,6 +1,14 @@
+# 这个文件的内容就是上游要的那一条。
+# 用法：复制到 awesome-dsh-plugin 仓库的
+#   data/plugins/AirPineApplea__feiyu-chat-companion.yml
+# 然后发 PR。单包仓库的文件名没有 --packages- 后缀。
+#
+# 注意上游规矩：description 只能是一句话、不许带营销词；
+# 描述里写了什么，评审会对着代码核。价格之类的数字放 README，不放这里。
+
 url: https://github.com/AirPineApplea/feiyu-chat-companion
 name: AirPineApplea/feiyu-chat-companion
 category: ui
 description:
-  en: "A desktop companion for DeepSeek Harness: a whale girl who lives on your screen. Not a web element inside the app — a real Win32 layered window with per-pixel alpha, so she stays above other windows, never enters the taskbar and never steals focus. She can be dragged (she stops at the screen edge), she blinks, and she speaks in a bubble above her head. If you sit still on one window for ten seconds she says something about it on her own. Right-click her and a small input box appears: ask one question, press Enter, and the answer comes back in the bubble. The point of the design is cost. She does not borrow the conversation you are working in; her first sentence opens her own short session, which is discarded and rebuilt every thirty lines. Measured on deepseek-flash with reasoning off and the longest reply setting: about 0.1 fen per steady-state line, about 4 fen for a full thirty-line session, under 0.1 yuan for sixty lines a day — roughly six times cheaper than waking an agent inside a large session. Two optional integrations: with feiyu-memory installed she inherits its persona and memory automatically (it attaches to every new agent; there is no dependency), and with a TTS plugin installed the panel grows a read-aloud switch whose voice and engine follow that plugin's own settings. Audio plays in the web page, so with the page closed she still shows bubbles but stays silent. Windows only. Zero runtime dependencies, no build step."
-  zh: "给 DeepSeek Harness 的桌面桌宠：一只一直待在屏幕上的鲸鱼娘。她不是嵌在应用里的网页元素，而是一个真正的 Win32 分层窗口（逐像素 alpha），所以能盖在别的应用窗口之上，不进任务栏、不抢焦点。能拖，撞到屏幕边缘就停住；会眨眼；说话靠头顶的气泡。你在同一个窗口停够十秒，她会自己开口说一句。右键点她会弹出一个小输入框：问一句话，回车，答案回到气泡里。整套设计的重点在钱。她不借用你正在用的那条会话——第一次开口时自己开一条短会话，攒够三十句就丢掉重建。实测 deepseek-flash、推理关、回话长度开最长：稳态一句约 0.1 分，一条三十句的会话约 4 分，一天说六十句不到一毛，比在大会话里唤醒一次 agent 便宜约六倍。两个可选联动：装了「肥鱼日记」时她自动继承人格与记忆（对方监听 agent/created，对每个新会话都挂记忆段，这里没有任何依赖声明）；装了语音插件时面板会多出一个「朗读」开关，音色与引擎跟着那个插件自己的设置走。声音在网页里播放，所以网页关掉时她照样冒气泡，只是不出声。只支持 Windows。零运行时依赖，无构建步骤。"
+  en: 'Desktop companion for DeepSeek Harness: a Win32 layered window that keeps a whale-girl above other applications, speaks through a bubble, comments on its own when you stay on one window for ten seconds, and answers a single question typed into a right-click input box.'
+  zh: '给 DeepSeek Harness 的桌面桌宠：一个 Win32 分层窗口，让鲸鱼娘待在别的应用窗口之上，气泡说话；你在同一个窗口停够十秒它会自己开口，右键弹出的输入框里可以问它一个问题。'
