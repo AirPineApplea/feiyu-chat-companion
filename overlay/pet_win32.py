@@ -41,6 +41,7 @@ STATE_PATH = os.path.join(STATE_DIR, "state.json")
 PID_PATH = os.path.join(STATE_DIR, "pet.pid")
 SAY_PATH = os.path.join(STATE_DIR, "say.json")
 CONTROL_PATH = os.path.join(STATE_DIR, "control.json")
+POKE_PATH = os.path.join(STATE_DIR, "poke.json")   # 左键点一下她 → 让 Host 催她说一句
 FOREGROUND_PATH = os.path.join(STATE_DIR, "foreground.json")
 
 
@@ -366,7 +367,7 @@ class Bubble(object):
         self._paint()
         user32.ShowWindow(self.hwnd, 8)
         self.visible = True
-        self.hide_at = time.time() + duration
+        self.hide_at = time.monotonic() + duration
 
     def move_to(self, x, y):
         self.x, self.y = x, y
@@ -374,7 +375,7 @@ class Bubble(object):
             self._paint()
 
     def tick(self):
-        if self.visible and time.time() >= self.hide_at:
+        if self.visible and time.monotonic() >= self.hide_at:
             user32.ShowWindow(self.hwnd, SW_HIDE)
             self.visible = False
 
@@ -386,7 +387,7 @@ class Pet(object):
                        load_rgba(closed_path, PET_HEIGHT)]
         self.size, self.pixels = self.frames[0]
         self.frame_index = 0
-        self.next_blink = time.time() + random.uniform(2.5, 5.0)
+        self.next_blink = time.monotonic() + random.uniform(2.5, 5.0)
         self.blink_until = 0.0
         self.w, self.h = self.size
         self.left, self.top, self.right, self.bottom = work_area()
@@ -450,6 +451,8 @@ class Pet(object):
         self.visible = True
         self.x, self.y = x, y
         self._drag = None
+        # 左键按下时的位置和时刻：用来区分「点一下」和「拖」
+        self._press = None
 
         # 地址栏探测跑在后台：UIA 读一次要 0.7 秒左右，塞进 60ms 的 tick 里会卡眨眼
         self.current_url = ""
@@ -619,7 +622,7 @@ class Pet(object):
         让桌宠干这活而不是 Host：它本来就在 Win32 里，GetForegroundWindow 一行事；
         Host 是 Node，拿这个得再起个子进程，不值。
         """
-        now = time.time()
+        now = time.monotonic()
         if now - self.probe_at < 1.0:
             return
         self.probe_at = now
@@ -667,7 +670,9 @@ class Pet(object):
             self._check_control()
             self._probe_foreground()
             self.bubble.tick()
-            now = time.time()
+            # 眨眼也用单调钟：这里和气泡隐藏计时是同一类判断，墙钟被校时跳一下
+            # 就会让一次眨眼卡住或者连眨。
+            now = time.monotonic()
             if self.blink_until:
                 if now >= self.blink_until:
                     self._set_frame(0)
@@ -696,6 +701,7 @@ class Pet(object):
             pt = POINT()
             user32.GetCursorPos(ctypes.byref(pt))
             self._drag = (pt.x, pt.y, self.x, self.y)
+            self._press = (pt.x, pt.y, time.monotonic())
             user32.SetCapture(hwnd)      # 不抓的话，指针一离开窗口就收不到 MOUSEMOVE
             return 0
         if msg == WM_MOUSEMOVE and self._drag is not None:
@@ -715,6 +721,16 @@ class Pet(object):
             user32.ReleaseCapture()
             self._drag = None
             self._save_pos()
+            # 点一下（没怎么动、也没按太久）和拖要分开：拖是挪位置，点是催她说一句
+            press = self._press
+            self._press = None
+            if press is not None:
+                pt = POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+                moved = abs(pt.x - press[0]) + abs(pt.y - press[1])
+                held = time.monotonic() - press[2]
+                if moved <= 4 and held <= 0.6:
+                    self._poke()
             return 0
         if msg == WM_RBUTTONUP:
             self._show_menu()
@@ -729,6 +745,21 @@ class Pet(object):
         self.state["y"] = self.y
         self.state["muted"] = bool(self.muted)
         save_state(self.state)
+
+    def _poke(self):
+        """左键点一下她 → 写 poke.json，Host 500ms 内接走，让她立刻说一句。
+
+        走文件不直接找 Host：两边本来就靠文件解耦，多开一条通道反而多一个要维护的。
+        """
+        try:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            tmp = POKE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"seq": int(time.time() * 1000)}, fh)
+            os.replace(tmp, POKE_PATH)
+        except Exception:
+            return
+        self._log("被戳了一下")
 
     def _ask(self):
         """弹一个单行输入框问她一句。
