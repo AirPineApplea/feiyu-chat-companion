@@ -27,6 +27,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(os.path.dirname(HERE), "assets")
 PET_HEIGHT = 113          # 图片像素高度；系统 150% 缩放后落到屏幕上是 ~75
 
+# 被戳一下之后的回弹：先下沉，再弹过原位一点点，最后落定。
+# 60ms 的 tick 大约能画 6 帧，够读出「Q弹」，再多也算不出来（tick 就这么密）。
+BOUNCE_S = 0.35
+BOUNCE_DOWN = 8           # 往下沉几像素
+BOUNCE_UP = 3             # 回弹时越过原位几像素
+# 三段的时间切分（占整段的比例）。下沉不能太短：原来是 0.22，结果 60ms 那一帧
+# 就掉到底了，看起来像卡了一下而不是被按下去。0.42 能落成两帧，才读得出「沉」。
+BOUNCE_DOWN_END = 0.42
+BOUNCE_UP_END = 0.62
+
 FONT_PATH = r"C:\Windows\Fonts\msyh.ttc"
 BUBBLE_FONT_SIZE = 13
 BUBBLE_MAX_W = 210
@@ -453,6 +463,8 @@ class Pet(object):
         self._drag = None
         # 左键按下时的位置和时刻：用来区分「点一下」和「拖」
         self._press = None
+        # 戳一下之后的回弹动画，None = 没在弹
+        self._bounce = None
 
         # 地址栏探测跑在后台：UIA 读一次要 0.7 秒左右，塞进 60ms 的 tick 里会卡眨眼
         self.current_url = ""
@@ -666,13 +678,14 @@ class Pet(object):
         # 整轮包起来。以前任何一步抛异常都会被 ctypes 静默吞掉，然后这一轮剩下的
         # 全跳过（气泡没了、眨眼停一拍），而且没有任何记录 —— 查都无从查起。
         try:
+            now = time.monotonic()
             self._check_say()
             self._check_control()
             self._probe_foreground()
             self.bubble.tick()
+            self._bounce_tick(now)
             # 眨眼也用单调钟：这里和气泡隐藏计时是同一类判断，墙钟被校时跳一下
             # 就会让一次眨眼卡住或者连眨。
-            now = time.monotonic()
             if self.blink_until:
                 if now >= self.blink_until:
                     self._set_frame(0)
@@ -702,6 +715,7 @@ class Pet(object):
             user32.GetCursorPos(ctypes.byref(pt))
             self._drag = (pt.x, pt.y, self.x, self.y)
             self._press = (pt.x, pt.y, time.monotonic())
+            self._bounce_stop()          # 上一轮还在弹的话，先回原位再开始拖
             user32.SetCapture(hwnd)      # 不抓的话，指针一离开窗口就收不到 MOUSEMOVE
             return 0
         if msg == WM_MOUSEMOVE and self._drag is not None:
@@ -730,7 +744,8 @@ class Pet(object):
                 moved = abs(pt.x - press[0]) + abs(pt.y - press[1])
                 held = time.monotonic() - press[2]
                 if moved <= 4 and held <= 0.6:
-                    self._poke()
+                    self._bounce_start()     # 先沉一下再弹起来
+                    self._poke()             # 同时让她应一声
             return 0
         if msg == WM_RBUTTONUP:
             self._show_menu()
@@ -745,6 +760,47 @@ class Pet(object):
         self.state["y"] = self.y
         self.state["muted"] = bool(self.muted)
         save_state(self.state)
+
+    # ────────── 戳一下之后的上下回弹 ──────────
+
+    def _bounce_start(self):
+        """松开鼠标、判定为「点了一下」之后调用：她先沉一下再弹起来。
+
+        只改窗口位置，不换位图 —— 所以没有重建 DIB、没有 GDI 泄漏那类风险。
+        """
+        self._bounce = {"base": self.y, "t0": time.monotonic()}
+
+    def _bounce_stop(self):
+        """中途被打断（比如开始拖）：立刻回到原位，别把拖拽的起点搞歪。"""
+        state = self._bounce
+        if state is None:
+            return
+        self._bounce = None
+        self.y = state["base"]
+        self._paint(self.x, self.y)
+
+    def _bounce_tick(self, now):
+        state = self._bounce
+        if state is None:
+            return
+        base = state["base"]
+        u = (now - state["t0"]) / BOUNCE_S
+        if u >= 1.0:
+            self._bounce = None
+            self._paint(self.x, base)
+            return
+        if u < BOUNCE_DOWN_END:
+            k = u / BOUNCE_DOWN_END
+            dy = BOUNCE_DOWN * (1.0 - (1.0 - k) ** 2)          # 缓出，沉到最低点
+        elif u < BOUNCE_UP_END:
+            k = (u - BOUNCE_DOWN_END) / (BOUNCE_UP_END - BOUNCE_DOWN_END)
+            dy = BOUNCE_DOWN + (-BOUNCE_UP - BOUNCE_DOWN) * k    # 从最低点弹上去
+        else:
+            k = (u - BOUNCE_UP_END) / (1.0 - BOUNCE_UP_END)
+            dy = -BOUNCE_UP * (1.0 - k)                         # 过冲一点点再落定
+        # 她的默认位置就在屏幕底边，往下沉会撞；撞了就夹住，别沉出屏幕
+        y = max(self.top, min(int(round(base + dy)), self.bottom - self.h))
+        self._paint(self.x, y)
 
     def _poke(self):
         """左键点一下她 → 写 poke.json，Host 500ms 内接走，让她立刻说一句。
