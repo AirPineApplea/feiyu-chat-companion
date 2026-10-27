@@ -1,8 +1,7 @@
 {
   "name": "feiyu-chat-companion",
-  "version": "0.1.7",
-  "private": true,
-  "description": "肥鱼陪聊：一只永远在屏幕上、能拖、会眨眼、会说话的鲸鱼娘。独立实现，不依赖 dsh-pet。",
+  "version": "0.1.8",
+  "description": "Desktop companion for DeepSeek Harness: a Win32 layered-window whale girl that sits above other windows, speaks in a bubble, and comments on its own when you stay on one window.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -22,6 +21,26 @@
     "README.md"
   ],
   "license": "MIT",
+  "author": "AirPineApplea",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AirPineApplea/feiyu-chat-companion.git"
+  },
+  "homepage": "https://github.com/AirPineApplea/feiyu-chat-companion#readme",
+  "bugs": {
+    "url": "https://github.com/AirPineApplea/feiyu-chat-companion/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "desktop-pet",
+    "win32",
+    "layered-window",
+    "tts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
