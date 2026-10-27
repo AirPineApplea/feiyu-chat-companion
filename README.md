@@ -187,6 +187,30 @@ dsh plugin --profile desktop add github:c1overzz/dsh-bili-scroll
 
 ---
 
+## 被安全软件挡了怎么办（卡巴斯基、其他杀软）
+
+症状很好认：**侧栏面板能打开，点「启动」没反应，桌面上不出现她**，而且 `pet.log` 里连一条新记录都没有。
+
+原因不是我藏了什么，是桌宠靠 DSH 自带的 Python 起一个窗口进程，安全软件常把「一个后台程序去起另一个 Python 进程、还画一个置顶透明窗口」判成可疑行为，直接拦掉进程创建。
+
+**卡巴斯基（21.x 实测）：**
+
+1. 打开设置 → 安全设置 → **入侵防御**（也叫应用程序控制）→ **管理应用程序**
+2. 添加下面这两个文件，规则设为 **受信任**，子项全部允许：
+   ```
+   <DSH 安装目录>\resources\runtime\primary-runtime\dependencies\python\pythonw.exe
+   <DSH 安装目录>\resources\runtime\primary-runtime\dependencies\python\python.exe
+   ```
+   默认在 `C:\Users\<你>\AppData\Local\Programs\DeepSeek Harness\`。
+   `AppData` 是隐藏目录，选择框里往往看不到，**直接粘贴路径**，别用“浏览”。
+3. `pythonw.exe` 是关键那个；`python.exe` 一起加上，省得以后换个入口再犯一次。
+
+不用去「排除项」加扫描白名单。**扫描白名单管的是「别扫它」，这里被拦的是「别运行它」**，那是两回事——排除项里加完照样起不来。
+
+其它杀软同理：找「受信任的应用程序 / 白名单 / 应用控制」，把这两个 exe 加进去。
+
+---
+
 ## 已知限制
 
 - **只在 Windows 上跑**，而且只测过 Windows 11 + DSH 0.2.1-rc.2
