@@ -76,28 +76,20 @@ def save_state(data):
         pass
 
 
-def _alive(pid):
-    try:
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, pid)   # QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        code = ctypes.c_ulong()
-        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-        kernel32.CloseHandle(handle)
-        return bool(ok) and code.value == 259               # STILL_ACTIVE
-    except Exception:
-        return False
-
-
 def claim_instance():
-    """已经有一只鱼在跑就不再启动第二只。"""
+    """已经有一只鱼在跑就不再启动第二只。
+
+    不能只看 PID。进程死掉后 PID 会被系统回收复用，那个号可能已经变成别的程序
+    （真实案例：她的 15752 变成了 Realtek 的音频服务）。这时"这个 PID 还活着"成立，
+    新进程就以为「已经有鱼在跑」，于是干净退出、退出码 0 ——
+    表现是「点启动没反应，桌面上永远不出现」，而且日志里连崩溃都没有。
+
+    改成看窗口：她活着，桌面上就一定有一个 DshWebPetWnd 类的窗口。
+    进程退出时系统会销毁它的窗口，所以这里不会有假阳性。
+    """
     try:
-        if os.path.exists(PID_PATH):
-            with open(PID_PATH, "r", encoding="utf-8") as handle:
-                other = int((handle.read() or "0").strip() or 0)
-            if other and other != os.getpid() and _alive(other):
-                return False
+        if user32.FindWindowW("DshWebPetWnd", None):
+            return False
     except Exception:
         pass
     try:
@@ -150,6 +142,9 @@ user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LP
                                    ctypes.c_int, ctypes.c_int, wintypes.HWND,
                                    wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID]
 user32.RegisterClassExW.restype = wintypes.WORD
+# 找窗口用：返回值是 HWND，不声明 restype 会被截成 32 位
+user32.FindWindowW.restype = wintypes.HWND
+user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
 
 # GDI 的句柄在 64 位下是 64 位值（常见形如 0xFFFFFFFF9A0B1234）。
 # 不声明 argtypes 的话 ctypes 按 32 位 int 收，传进去就
