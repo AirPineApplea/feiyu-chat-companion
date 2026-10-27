@@ -1,6 +1,6 @@
 {
   "name": "feiyu-chat-companion",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Desktop companion for DeepSeek Harness: a Win32 layered-window whale girl that sits above other windows, speaks in a bubble, and comments on its own when you stay on one window.",
   "type": "module",
   "main": "lib/index.js",
