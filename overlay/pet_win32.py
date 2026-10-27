@@ -118,6 +118,16 @@ HWND_TOPMOST = -1
 SPI_GETWORKAREA = 0x0030
 WM_DESTROY = 0x0002
 WM_TIMER = 0x0113
+
+# 两条定时器，各干各的：
+#   POLL —— 60ms，读 say.json / control.json、看前台窗口、气泡该不该收
+#   ANIM —— 16ms（约 60 帧），只画回弹。**只在弹的那 350ms 里开**，闲着一条都不开。
+# 为什么不把 POLL 也提到 16ms：那一轮要 stat 三个文件，60 帧就是每秒 180 次，
+# 白耗磁盘还容易抖。回弹是纯内存计算，才配得上 60 帧。
+POLL_MS = 60
+ANIM_MS = 16
+TIMER_POLL = 1
+TIMER_ANIM = 2
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 WM_MOUSEMOVE = 0x0200
@@ -145,6 +155,11 @@ user32.RegisterClassExW.restype = wintypes.WORD
 # 找窗口用：返回值是 HWND，不声明 restype 会被截成 32 位
 user32.FindWindowW.restype = wintypes.HWND
 user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+# SetTimer 返回的是 UINT_PTR（64 位下是 64 位），不声明 restype 会被截断
+user32.SetTimer.restype = ctypes.c_size_t
+user32.SetTimer.argtypes = [wintypes.HWND, ctypes.c_size_t, wintypes.UINT, wintypes.LPVOID]
+user32.KillTimer.restype = wintypes.BOOL
+user32.KillTimer.argtypes = [wintypes.HWND, ctypes.c_size_t]
 
 # GDI 的句柄在 64 位下是 64 位值（常见形如 0xFFFFFFFF9A0B1234）。
 # 不声明 argtypes 的话 ctypes 按 32 位 int 收，传进去就
@@ -446,7 +461,7 @@ class Pet(object):
 
         self._paint(x, y)
         user32.ShowWindow(self.hwnd, 8)   # SW_SHOWNA
-        user32.SetTimer(self.hwnd, 1, 60, None)   # 60ms 一次，够 100ms 的眨眼不出戏
+        user32.SetTimer(self.hwnd, TIMER_POLL, POLL_MS, None)   # 干活的那条，60ms 够
         self.bubble = Bubble()
         self.say_mtime = -1.0
         self.say_seq = 0
@@ -460,6 +475,7 @@ class Pet(object):
         self._press = None
         # 戳一下之后的回弹动画，None = 没在弹
         self._bounce = None
+        self._anim_on = False        # 16ms 那条动画定时器开着没有
 
         # 地址栏探测跑在后台：UIA 读一次要 0.7 秒左右，塞进 60ms 的 tick 里会卡眨眼
         self.current_url = ""
@@ -703,7 +719,10 @@ class Pet(object):
 
     def _wndproc(self, hwnd, msg, wparam, lparam):
         if msg == WM_TIMER:
-            self._tick()
+            if wparam == TIMER_ANIM:
+                self._tick_anim()
+            else:
+                self._tick()
             return 0
         if msg == WM_LBUTTONDOWN:
             pt = POINT()
@@ -746,6 +765,8 @@ class Pet(object):
             self._show_menu()
             return 0
         if msg == WM_DESTROY:
+            user32.KillTimer(hwnd, TIMER_POLL)
+            user32.KillTimer(hwnd, TIMER_ANIM)
             user32.PostQuitMessage(0)
             return 0
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -758,12 +779,34 @@ class Pet(object):
 
     # ────────── 戳一下之后的上下回弹 ──────────
 
+    def _anim_start(self):
+        """开 16ms 那条。只在回弹期间开，弹完就关 —— 闲着不该让 CPU 每秒醒 60 次。"""
+        if self._anim_on:
+            return
+        self._anim_on = True
+        user32.SetTimer(self.hwnd, TIMER_ANIM, ANIM_MS, None)
+
+    def _anim_stop(self):
+        if not self._anim_on:
+            return
+        self._anim_on = False
+        user32.KillTimer(self.hwnd, TIMER_ANIM)
+
+    def _tick_anim(self):
+        """16ms 一条，只画回弹，不碰文件。"""
+        try:
+            self._bounce_tick(time.monotonic())
+        except Exception:
+            self._log("anim 抛异常:\n" + traceback.format_exc()[-800:])
+
     def _bounce_start(self):
         """松开鼠标、判定为「点了一下」之后调用：她先沉一下再弹起来。
 
         只改窗口位置，不换位图 —— 所以没有重建 DIB、没有 GDI 泄漏那类风险。
+        350ms 的动画交给 16ms 的动画定时器，60ms 那条画出来只有 6 帧，看着就是「卡」。
         """
         self._bounce = {"base": self.y, "t0": time.monotonic()}
+        self._anim_start()
 
     def _bounce_stop(self):
         """中途被打断（比如开始拖）：立刻回到原位，别把拖拽的起点搞歪。"""
@@ -771,6 +814,7 @@ class Pet(object):
         if state is None:
             return
         self._bounce = None
+        self._anim_stop()
         self.y = state["base"]
         self._paint(self.x, self.y)
 
@@ -782,6 +826,7 @@ class Pet(object):
         u = (now - state["t0"]) / BOUNCE_S
         if u >= 1.0:
             self._bounce = None
+            self._anim_stop()
             self._paint(self.x, base)
             return
         if u < BOUNCE_DOWN_END:
